@@ -2,11 +2,15 @@ package com.example.aiinterviewapp
 
 import android.net.Uri
 import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
-import com.example.aiinterviewapp.data.service.ResumeTextSource
 import com.example.aiinterviewapp.domain.model.ResumeAnalysis
+import com.example.aiinterviewapp.domain.model.ResumeDocumentType
+import com.example.aiinterviewapp.domain.model.ResumeExtraction
+import com.example.aiinterviewapp.domain.model.ResumeExtractionException
 import com.example.aiinterviewapp.domain.model.ResumeProfile
+import com.example.aiinterviewapp.domain.model.ResumeTextOrigin
 import com.example.aiinterviewapp.domain.repository.ResumeAnalysisRepository
 import com.example.aiinterviewapp.domain.repository.ResumeProfileStore
+import com.example.aiinterviewapp.domain.repository.ResumeTextExtractor
 import com.example.aiinterviewapp.domain.usecase.AnalyzeResumeUseCase
 import com.example.aiinterviewapp.ui.screens.resume.ResumeStage
 import com.example.aiinterviewapp.ui.screens.resume.ResumeViewModel
@@ -39,7 +43,7 @@ class ResumeViewModelResumeAnalysisTest {
     private val dispatcher = StandardTestDispatcher()
 
     private lateinit var viewModelRef: ResumeViewModel
-    private lateinit var textSource: RecordingTextSource
+    private lateinit var textSource: RecordingTextExtractor
     private lateinit var store: RecordingProfileStore
     private lateinit var analysisRepository: ScriptedAnalysisRepository
     private lateinit var authPreferences: AuthPreferences
@@ -75,7 +79,7 @@ class ResumeViewModelResumeAnalysisTest {
     }
 
     private fun build(text: String = androidText) {
-        textSource = RecordingTextSource(text) { viewModelRef.uiState.value.stage }
+        textSource = RecordingTextExtractor(text) { viewModelRef.uiState.value.stage }
         store = RecordingProfileStore()
         analysisRepository = ScriptedAnalysisRepository { viewModelRef.uiState.value.stage }
         authPreferences = mock()
@@ -83,7 +87,7 @@ class ResumeViewModelResumeAnalysisTest {
         whenever(authPreferences.resumeText).thenReturn(resumeText)
 
         viewModelRef = ResumeViewModel(
-            resumeTextSource = textSource,
+            resumeTextExtractor = textSource,
             authPreferences = authPreferences,
             analyzeResume = AnalyzeResumeUseCase(analysisRepository),
             profileStore = store
@@ -167,11 +171,14 @@ class ResumeViewModelResumeAnalysisTest {
         analysisRepository.result = { Result.success(ResumeAnalysis(androidProfile)) }
         advanceUntilIdle()
 
-        val failing = object : ResumeTextSource {
-            override suspend fun extractText(uri: Uri): String = throw IllegalStateException("Encrypted PDFs are not supported")
+        val failing = object : ResumeTextExtractor {
+            override suspend fun extract(
+                uri: Uri,
+                onStage: (ResumeTextExtractor.ExtractionStage) -> Unit
+            ): Result<ResumeExtraction> = Result.failure(ResumeExtractionException.CorruptDocument())
         }
         val failingViewModel = ResumeViewModel(
-            resumeTextSource = failing,
+            resumeTextExtractor = failing,
             authPreferences = authPreferences,
             analyzeResume = AnalyzeResumeUseCase(analysisRepository),
             profileStore = store
@@ -181,21 +188,27 @@ class ResumeViewModelResumeAnalysisTest {
         failingViewModel.uploadResume(uri())
         advanceUntilIdle()
 
-        assertNotNull(failingViewModel.uiState.value.error)
-        assertTrue(failingViewModel.uiState.value.error!!.contains("Encrypted"))
+        assertEquals("Unable to read this PDF.", failingViewModel.uiState.value.error)
         assertEquals(0, analysisRepository.calls)
     }
 
     @Test
     fun `a text-less pdf reports missing text and does not analyse`() = runTest(dispatcher) {
         build(text = "   ")
+        // With OCR in place, a text-less PDF is routed to OCR rather than
+        // rejected outright; the extractor owns that decision. This covers the
+        // case where OCR also produced nothing usable.
+        textSource.failure = ResumeExtractionException.NoReadableContent()
         analysisRepository.result = { Result.success(ResumeAnalysis(androidProfile)) }
         advanceUntilIdle()
 
         viewModelRef.uploadResume(uri())
         advanceUntilIdle()
 
-        assertNotNull(viewModelRef.uiState.value.error)
+        assertEquals(
+            "No readable resume content was found.",
+            viewModelRef.uiState.value.error
+        )
         assertEquals(0, analysisRepository.calls)
         assertNull(viewModelRef.uiState.value.profile)
     }
@@ -386,19 +399,29 @@ class ResumeViewModelResumeAnalysisTest {
     private fun com.example.aiinterviewapp.ui.screens.resume.ResumeUiState.resumeProfileNow() =
         profile
 
-    private class RecordingTextSource(
+    private class RecordingTextExtractor(
         var nextText: String,
         private val stage: () -> ResumeStage
-    ) : ResumeTextSource {
+    ) : ResumeTextExtractor {
         var calls = 0
         var failure: Throwable? = null
         var stageSeenInsideExtract: ResumeStage? = null
 
-        override suspend fun extractText(uri: Uri): String {
+        override suspend fun extract(
+            uri: Uri,
+            onStage: (ResumeTextExtractor.ExtractionStage) -> Unit
+        ): Result<ResumeExtraction> {
             calls++
             stageSeenInsideExtract = stage()
-            failure?.let { throw it }
-            return nextText
+            onStage(ResumeTextExtractor.ExtractionStage.EXTRACTING_TEXT)
+            failure?.let { return Result.failure(it) }
+            return Result.success(
+                ResumeExtraction(
+                    text = nextText,
+                    origin = ResumeTextOrigin.PDF_TEXT,
+                    documentType = ResumeDocumentType.PDF
+                )
+            )
         }
     }
 

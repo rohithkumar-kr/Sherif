@@ -1,10 +1,12 @@
 package com.example.aiinterviewapp.ui.screens.resume
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.*import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -15,12 +17,26 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.aiinterviewapp.domain.model.ResumeProfile
+
+/**
+ * Resume formats offered by the picker.
+ *
+ * The picker filters, but it does not enforce: a provider can still hand back
+ * something else, which `ResumeDocumentType` then rejects before any OCR or
+ * Gemini work happens.
+ */
+private val SUPPORTED_MIME_TYPES = arrayOf(
+    "application/pdf",
+    "image/jpeg",
+    "image/png"
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,12 +45,21 @@ fun ResumeManagerScreen(
     viewModel: ResumeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
-        uri?.let { viewModel.uploadResume(it) }
+        uri ?: return@rememberLauncherForActivityResult
+        // Hold a read grant so the document stays readable for the duration of
+        // extraction, including any OCR pass over rendered pages.
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        viewModel.uploadResume(uri)
     }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -98,7 +123,7 @@ fun ResumeManagerScreen(
                         )
 
                         Button(
-                            onClick = { launcher.launch("application/pdf") },
+                            onClick = { launcher.launch(SUPPORTED_MIME_TYPES) },
                             modifier = Modifier.fillMaxWidth().height(56.dp),
                             shape = RoundedCornerShape(16.dp)
                         ) {
@@ -117,7 +142,7 @@ fun ResumeManagerScreen(
                             Text("Re-analyze with AI")
                         }
                     } else {
-                        EmptyResumeState { launcher.launch("application/pdf") }
+                        EmptyResumeState { launcher.launch(SUPPORTED_MIME_TYPES) }
                     }
                 }
             }
@@ -126,30 +151,45 @@ fun ResumeManagerScreen(
 }
 
 /**
- * Extraction and analysis are reported separately on purpose. While the PDF is
- * being read no request has been sent to Gemini, so the UI must not imply
- * otherwise.
+ * Reports the operation that is genuinely running.
+ *
+ * OCR gets its own message rather than being folded into extraction, so a
+ * normal text PDF never shows a "reading scanned resume" message it did not
+ * earn, and Gemini is never mentioned before the request is actually sent.
  */
 @Composable
 private fun LoadingState(stage: ResumeStage) {
+    val title: String
+    val detail: String
+    when (stage) {
+        ResumeStage.EXTRACTING -> {
+            title = "Extracting resume text..."
+            detail = "Reading text from your document"
+        }
+        ResumeStage.RUNNING_OCR -> {
+            title = "Reading scanned resume..."
+            detail = "No selectable text was found, so this is being read on your device"
+        }
+        ResumeStage.READING_IMAGE -> {
+            title = "Reading resume image..."
+            detail = "This is being read on your device"
+        }
+        ResumeStage.ANALYZING -> {
+            title = "Analyzing resume with AI..."
+            detail = "Asking Gemini to build your resume profile"
+        }
+        ResumeStage.IDLE -> {
+            title = "Working..."
+            detail = "Preparing your resume"
+        }
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         CircularProgressIndicator(strokeWidth = 3.dp)
         Spacer(Modifier.height(16.dp))
-        Text(
-            text = if (stage == ResumeStage.EXTRACTING) {
-                "Reading PDF..."
-            } else {
-                "Analyzing resume with AI..."
-            },
-            style = MaterialTheme.typography.bodyMedium
-        )
+        Text(text = title, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            text = if (stage == ResumeStage.EXTRACTING) {
-                "Extracting text from your document"
-            } else {
-                "Asking Gemini to build your resume profile"
-            },
+            text = detail,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -538,7 +578,7 @@ fun EmptyResumeState(onUpload: () -> Unit) {
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Upload your resume in PDF format to get an AI profile and personalized interview questions.",
+            "Upload your resume as a PDF, JPG, JPEG or PNG to get an AI profile and personalized interview questions. Scanned documents are read on your device.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -552,7 +592,7 @@ fun EmptyResumeState(onUpload: () -> Unit) {
         ) {
             Icon(Icons.Default.FileUpload, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Select PDF File")
+            Text("Select Resume File")
         }
     }
 }

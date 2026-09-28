@@ -4,9 +4,11 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
-import com.example.aiinterviewapp.data.service.ResumeTextSource
+import com.example.aiinterviewapp.domain.model.ResumeExtractionException
 import com.example.aiinterviewapp.domain.model.ResumeProfile
+import com.example.aiinterviewapp.domain.model.ResumeTextOrigin
 import com.example.aiinterviewapp.domain.repository.ResumeProfileStore
+import com.example.aiinterviewapp.domain.repository.ResumeTextExtractor
 import com.example.aiinterviewapp.domain.usecase.AnalyzeResumeUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,13 +21,18 @@ import javax.inject.Inject
 /**
  * Which part of the resume pipeline is currently running.
  *
- * [EXTRACTING] and [ANALYZING] are deliberately distinct: extraction is local
- * PDF text extraction and has not involved Gemini at all, so the UI must not
- * claim the document is being analyzed while it is still being read.
+ * The stages are deliberately distinct so the UI can describe the real work:
+ * [EXTRACTING] is local document reading and involves no Gemini call at all,
+ * [RUNNING_OCR] is a local OCR pass, and only [ANALYZING] sends a request.
+ * A resumable document that already has usable text must never display an OCR
+ * message, which is why OCR is its own stage rather than a flavour of
+ * extraction.
  */
 enum class ResumeStage {
     IDLE,
     EXTRACTING,
+    RUNNING_OCR,
+    READING_IMAGE,
     ANALYZING
 }
 
@@ -40,9 +47,13 @@ data class ResumeUiState(
     /** Resume text currently awaiting analysis, used by retry. */
     val pendingAnalysisText: String? = null,
     /** Resume text the displayed profile was actually derived from. */
-    val profileSourceText: String? = null
+    val profileSourceText: String? = null,
+    /** How the current resume text was obtained, shown as a small provenance note. */
+    val textOrigin: ResumeTextOrigin? = null
 ) {
     val isExtracting: Boolean get() = stage == ResumeStage.EXTRACTING
+    val isRunningOcr: Boolean get() = stage == ResumeStage.RUNNING_OCR
+    val isReadingImage: Boolean get() = stage == ResumeStage.READING_IMAGE
     val isAnalyzing: Boolean get() = stage == ResumeStage.ANALYZING
     val isLoading: Boolean get() = stage != ResumeStage.IDLE
     val canRetry: Boolean get() = !isLoading && !pendingAnalysisText.isNullOrBlank()
@@ -55,7 +66,7 @@ data class ResumeUiState(
 
 @HiltViewModel
 class ResumeViewModel @Inject constructor(
-    private val resumeTextSource: ResumeTextSource,
+    private val resumeTextExtractor: ResumeTextExtractor,
     private val authPreferences: AuthPreferences,
     private val analyzeResume: AnalyzeResumeUseCase,
     private val profileStore: ResumeProfileStore
@@ -87,11 +98,12 @@ class ResumeViewModel @Inject constructor(
     }
 
     /**
-     * Extracts text from the selected PDF, then analyses it with Gemini.
+     * Extracts text from the selected resume file, then analyses it with Gemini.
      *
-     * A failure at either step surfaces an error and leaves any previously
-     * successful profile untouched, so a bad upload can never destroy good
-     * state.
+     * The extractor decides whether the document needs OCR, and reports the
+     * stage so the UI can stay accurate. A failure at either step surfaces an
+     * error and leaves any previously successful profile untouched, so a bad
+     * upload can never destroy good state.
      */
     fun uploadResume(uri: Uri) {
         viewModelScope.launch {
@@ -99,36 +111,52 @@ class ResumeViewModel @Inject constructor(
                 stage = ResumeStage.EXTRACTING,
                 error = null
             )
-            val text = try {
-                resumeTextSource.extractText(uri)
-            } catch (e: Exception) {
+            val extraction = resumeTextExtractor.extract(uri) { stage ->
+                _uiState.value = _uiState.value.copy(stage = stage.toResumeStage())
+            }.getOrElse { throwable ->
                 _uiState.value = _uiState.value.copy(
                     stage = ResumeStage.IDLE,
-                    error = "Could not read this PDF: ${e.message ?: "the file appears to be damaged or unsupported."}"
+                    error = throwable.toUserMessage()
                 )
                 return@launch
             }
 
-            if (text.isBlank()) {
-                _uiState.value = _uiState.value.copy(
-                    stage = ResumeStage.IDLE,
-                    error = "No readable text was found in this PDF. Scanned or image-only resumes are not supported yet."
-                )
-                return@launch
-            }
+            val text = extraction.text
 
-            // Persist the text immediately so interview question generation
-            // keeps working even when Gemini is unavailable.
+            // Persist the normalized text immediately, whatever its origin, so
+            // interview question generation keeps working even when Gemini is
+            // unavailable. OCR-derived text is stored identically.
             authPreferences.setResumeText(text)
             _uiState.value = _uiState.value.copy(
                 stage = ResumeStage.ANALYZING,
                 hasResume = true,
                 extractedText = text,
+                textOrigin = extraction.origin,
                 error = null
             )
             runAnalysis(text)
         }
     }
+
+    /**
+     * Maps a typed extraction failure to user-facing wording.
+     *
+     * Typed failures already carry the required copy. Anything unexpected falls
+     * back to a generic message rather than leaking an exception string that
+     * might contain file paths.
+     */
+    private fun Throwable.toUserMessage(): String = when (this) {
+        is ResumeExtractionException -> message
+            ?: "Resume processing failed. Please upload a clearer resume."
+        else -> "Resume processing failed. Please upload a clearer resume."
+    }
+
+    private fun ResumeTextExtractor.ExtractionStage.toResumeStage(): ResumeStage =
+        when (this) {
+            ResumeTextExtractor.ExtractionStage.EXTRACTING_TEXT -> ResumeStage.EXTRACTING
+            ResumeTextExtractor.ExtractionStage.RUNNING_OCR -> ResumeStage.RUNNING_OCR
+            ResumeTextExtractor.ExtractionStage.READING_IMAGE -> ResumeStage.READING_IMAGE
+        }
 
     /** Re-runs analysis on the resume currently on screen (AC: re-analysis). */
     fun reanalyze() {
