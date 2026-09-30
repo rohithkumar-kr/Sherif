@@ -42,6 +42,7 @@ private val SUPPORTED_MIME_TYPES = arrayOf(
 @Composable
 fun ResumeManagerScreen(
     onBack: () -> Unit,
+    onStartResumeInterview: () -> Unit = {},
     viewModel: ResumeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -117,12 +118,23 @@ fun ResumeManagerScreen(
                     }
 
                     if (uiState.hasResume) {
+                        Button(
+                            onClick = onStartResumeInterview,
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Start Resume Interview", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        }
+
                         ResumeDetailCard(
                             text = uiState.extractedText ?: "",
                             onDelete = { viewModel.deleteResume() }
                         )
 
-                        Button(
+                        OutlinedButton(
                             onClick = { launcher.launch(SUPPORTED_MIME_TYPES) },
                             modifier = Modifier.fillMaxWidth().height(56.dp),
                             shape = RoundedCornerShape(16.dp)

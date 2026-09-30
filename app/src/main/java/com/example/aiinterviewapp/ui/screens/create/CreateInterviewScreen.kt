@@ -1,9 +1,12 @@
 package com.example.aiinterviewapp.ui.screens.create
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -13,25 +16,51 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CreateInterviewScreen(
     onBack: () -> Unit,
-    onStartInterview: (role: String, type: String, difficulty: String, experience: String, count: Int) -> Unit
+    onStartInterview: (role: String, type: String, difficulty: String, experience: String, count: Int) -> Unit,
+    viewModel: CreateInterviewViewModel = hiltViewModel()
 ) {
+    val createUiState by viewModel.uiState.collectAsState()
+
     var role by remember { mutableStateOf("Android Developer") }
-    var type by remember { mutableStateOf("Technical") }
+    var type by remember { mutableStateOf("Resume-Based") }
     var difficulty by remember { mutableStateOf("Medium") }
     var experience by remember { mutableStateOf("Fresher") }
     var questionCount by remember { mutableIntStateOf(5) }
+    var isUserRoleEdited by remember { mutableStateOf(false) }
+
+    val pdfLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { viewModel.uploadResume(it) }
+    }
+
+    // Auto pre-fill role if available and user hasn't typed manually yet
+    LaunchedEffect(createUiState.resumeProfile) {
+        val targetRole = createUiState.resumeProfile?.targetRole
+        if (!targetRole.isNullOrBlank() && !isUserRoleEdited) {
+            role = targetRole
+        }
+    }
+
+    // Set default type based on resume availability
+    LaunchedEffect(createUiState.hasResume) {
+        if (!createUiState.hasResume && type == "Resume-Based") {
+            type = "Technical"
+        } else if (createUiState.hasResume && type == "Technical") {
+            type = "Resume-Based"
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -56,19 +85,170 @@ fun CreateInterviewScreen(
                     .weight(1f)
                     .padding(horizontal = 20.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
-                Spacer(Modifier.height(8.dp))
-                
+                Spacer(Modifier.height(4.dp))
+
                 Text(
                     text = "Personalize your session",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.ExtraBold
                 )
 
+                // Resume Card / Upload Section
+                if (createUiState.hasResume) {
+                    val profile = createUiState.resumeProfile
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    modifier = Modifier.size(36.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.primary
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.Default.AutoAwesome,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Resume Grounded",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = profile?.candidateName ?: "Resume loaded & analyzed",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+
+                            if (profile != null && profile.technicalSkills.isNotEmpty()) {
+                                Spacer(Modifier.height(10.dp))
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    profile.technicalSkills.take(5).forEach { skill ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text(
+                                                text = skill,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Questions will be tailored to your resume",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                )
+                                profile?.targetRole?.takeIf { it.isNotBlank() }?.let { target ->
+                                    TextButton(
+                                        onClick = {
+                                            role = target
+                                            isUserRoleEdited = true
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.AutoFixHigh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Auto-fill Role", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Description,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Want resume-based questions?",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "Upload your resume PDF to ask AI questions based on your real projects and skills.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            if (createUiState.isUploading) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Uploading & Analyzing Resume...", style = MaterialTheme.typography.bodySmall)
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { pdfLauncher.launch("application/pdf") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Upload Resume PDF")
+                                }
+                            }
+                            createUiState.uploadError?.let { err ->
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = err,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+
                 PremiumTextField(
                     value = role,
-                    onValueChange = { role = it },
+                    onValueChange = {
+                        role = it
+                        isUserRoleEdited = true
+                    },
                     label = "Target Job Role",
                     icon = Icons.Default.WorkOutline,
                     modifier = Modifier.testTag("role_field")
@@ -76,7 +256,7 @@ fun CreateInterviewScreen(
 
                 PremiumDropdownSelector(
                     label = "Interview Type",
-                    options = listOf("Technical", "HR", "Behavioral", "Coding", "Mixed"),
+                    options = listOf("Resume-Based", "Technical", "HR", "Behavioral", "Coding", "Mixed"),
                     selectedOption = type,
                     onOptionSelected = { type = it },
                     icon = Icons.Default.Category
@@ -105,6 +285,8 @@ fun CreateInterviewScreen(
                     onOptionSelected = { questionCount = it.toInt() },
                     icon = Icons.Default.List
                 )
+
+                Spacer(Modifier.height(12.dp))
             }
 
             Surface(
@@ -122,7 +304,11 @@ fun CreateInterviewScreen(
                     shape = RoundedCornerShape(16.dp),
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
                 ) {
-                    Text("Start AI Session", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        if (type == "Resume-Based") "Start Resume Interview" else "Start AI Session",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
                     Spacer(Modifier.width(8.dp))
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                 }

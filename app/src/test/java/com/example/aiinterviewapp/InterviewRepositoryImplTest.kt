@@ -85,6 +85,26 @@ class InterviewRepositoryImplTest {
     }
 
     @Test
+    fun `generateQuestion with Resume-Based type includes resume prompt directive`() = runTest {
+        val api = FakeSherifBackendApi { geminiResponseOf("""{"question": "Tell me about your Compose project."}""") }
+
+        val result = repository(api).generateQuestion(
+            role = "Android Developer",
+            experience = "Fresher",
+            difficulty = "Medium",
+            type = "Resume-Based",
+            previousQuestions = emptyList(),
+            resumeContext = "Candidate built a Compose app using Room and Flow."
+        )
+
+        assertTrue(result.isSuccess)
+        assertEquals("Tell me about your Compose project.", result.getOrNull())
+        val sentPrompt = api.requests.single().contents.single().parts.single().text
+        assertTrue(sentPrompt.contains("MANDATORY DIRECTIVE FOR RESUME-BASED INTERVIEW"))
+        assertTrue(sentPrompt.contains("Candidate built a Compose app using Room and Flow."))
+    }
+
+    @Test
     fun `generateQuestion falls back to plain text response`() = runTest {
         val api = FakeSherifBackendApi { geminiResponseOf("What is a ViewModel?") }
 

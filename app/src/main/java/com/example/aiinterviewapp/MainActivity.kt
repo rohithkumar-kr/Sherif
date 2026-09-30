@@ -145,7 +145,8 @@ fun AppNavigation(
 
         composable(Screen.Resume.route) {
             ResumeManagerScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onStartResumeInterview = { navController.navigate(Screen.CreateInterview.route) }
             )
         }
 

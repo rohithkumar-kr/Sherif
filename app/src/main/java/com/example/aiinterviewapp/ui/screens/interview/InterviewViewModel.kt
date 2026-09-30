@@ -10,10 +10,13 @@ import com.example.aiinterviewapp.domain.model.InterviewQuestion
 import com.example.aiinterviewapp.domain.model.InterviewResumeState
 import com.example.aiinterviewapp.domain.model.InterviewStatus
 import com.example.aiinterviewapp.domain.model.QuestionEvaluation
+import com.example.aiinterviewapp.domain.model.ResumeProfile
+import com.example.aiinterviewapp.domain.model.hasContent
 import com.example.aiinterviewapp.domain.model.normalized
 import com.example.aiinterviewapp.domain.model.overallScorePercent
 import com.example.aiinterviewapp.domain.model.resumeState
 import com.example.aiinterviewapp.domain.repository.InterviewRepository
+import com.example.aiinterviewapp.domain.repository.ResumeProfileStore
 import com.example.aiinterviewapp.domain.usecase.EvaluateAnswerUseCase
 import com.example.aiinterviewapp.domain.usecase.GenerateQuestionUseCase
 import com.example.aiinterviewapp.ui.common.FeedbackMessage
@@ -34,7 +37,8 @@ class InterviewViewModel @Inject constructor(
     private val evaluateAnswerUseCase: EvaluateAnswerUseCase,
     private val repository: InterviewRepository,
     private val voiceService: VoiceService,
-    private val scopedResumeText: ScopedResumeText
+    private val scopedResumeText: ScopedResumeText,
+    private val profileStore: ResumeProfileStore? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<InterviewUiState>(InterviewUiState.Loading)
@@ -49,6 +53,9 @@ class InterviewViewModel @Inject constructor(
     private val _feedback = MutableStateFlow<FeedbackMessage?>(null)
     val feedback: StateFlow<FeedbackMessage?> = _feedback.asStateFlow()
 
+    private val _isResumeGrounded = MutableStateFlow(false)
+    val isResumeGrounded: StateFlow<Boolean> = _isResumeGrounded.asStateFlow()
+
     private var currentInterview: Interview? = null
     private var resumeContext: String? = null
     private var isBusy = false
@@ -61,9 +68,6 @@ class InterviewViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        // The microphone must be released when the screen goes, not when the
-        // user presses stop. Leaving a recogniser running holds the audio input
-        // device and the indicator stays on with nothing collecting results.
         voiceService.stopTts()
         voiceService.stopListening()
     }
@@ -116,7 +120,11 @@ class InterviewViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = InterviewUiState.Loading
             try {
-                resumeContext = scopedResumeText.currentUserResumeText.first()
+                val rawText = scopedResumeText.currentUserResumeText.first()
+                val profile = profileStore?.resumeProfile()?.first()
+                resumeContext = buildResumeContextString(rawText, profile)
+                _isResumeGrounded.value = !resumeContext.isNullOrBlank()
+
                 val resumable = repository.getResumableInterview()
                 if (resumable != null &&
                     resumable.role == role &&
@@ -142,7 +150,11 @@ class InterviewViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = InterviewUiState.Loading
             try {
-                resumeContext = scopedResumeText.currentUserResumeText.first()
+                val rawText = scopedResumeText.currentUserResumeText.first()
+                val profile = profileStore?.resumeProfile()?.first()
+                resumeContext = buildResumeContextString(rawText, profile)
+                _isResumeGrounded.value = !resumeContext.isNullOrBlank()
+
                 val saved = repository.getInterviewById(id)
                 if (saved == null) {
                     _uiState.value = InterviewUiState.Error("This interview is no longer available.")
@@ -159,6 +171,51 @@ class InterviewViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    private fun buildResumeContextString(rawText: String?, profile: ResumeProfile?): String? {
+        if (rawText.isNullOrBlank() && (profile == null || !profile.hasContent)) return null
+        return buildString {
+            profile?.let { p ->
+                p.candidateName?.takeIf { it.isNotBlank() }?.let { appendLine("Candidate Name: $it") }
+                p.targetRole?.takeIf { it.isNotBlank() }?.let { appendLine("Target Role in Resume: $it") }
+                if (p.technicalSkills.isNotEmpty()) {
+                    appendLine("Key Technical Skills: ${p.technicalSkills.joinToString(", ")}")
+                }
+                if (p.softSkills.isNotEmpty()) {
+                    appendLine("Soft Skills: ${p.softSkills.joinToString(", ")}")
+                }
+                if (p.projects.isNotEmpty()) {
+                    appendLine("Projects Listed:")
+                    p.projects.forEach { proj ->
+                        val projName = proj.name.orEmpty()
+                        val techs = proj.technologies.joinToString(", ")
+                        val desc = proj.description.orEmpty()
+                        appendLine("  - $projName ${if (techs.isNotBlank()) "($techs)" else ""} ${if (desc.isNotBlank()) "- $desc" else ""}")
+                    }
+                }
+                if (p.workExperience.isNotEmpty()) {
+                    appendLine("Work Experience:")
+                    p.workExperience.forEach { exp ->
+                        appendLine("  - ${exp.role.orEmpty()} at ${exp.company.orEmpty()} (${exp.duration.orEmpty()})")
+                    }
+                }
+                if (p.education.isNotEmpty()) {
+                    appendLine("Education:")
+                    p.education.forEach { edu ->
+                        appendLine("  - ${edu.degree.orEmpty()} in ${edu.field.orEmpty()} from ${edu.institution.orEmpty()}")
+                    }
+                }
+                if (p.certifications.isNotEmpty()) {
+                    appendLine("Certifications: ${p.certifications.joinToString(", ")}")
+                }
+                appendLine("")
+            }
+            if (!rawText.isNullOrBlank()) {
+                appendLine("Full Resume Text:")
+                appendLine(rawText)
+            }
+        }.trim()
     }
 
     private fun startNewInterview(
@@ -228,9 +285,6 @@ class InterviewViewModel @Inject constructor(
         isBusy = true
         viewModelScope.launch {
             _uiState.value = InterviewUiState.Loading
-            // Defensive deduplication: Gemini occasionally repeats a question
-            // despite the prompt. Reject any question that already exists and
-            // ask again (up to a few attempts) before surfacing an error.
             val existingQuestions = interview.questions.map { it.question }.toSet()
             var questionText: String? = null
             repeat(MAX_QUESTION_GENERATION_ATTEMPTS) {
@@ -291,20 +345,8 @@ class InterviewViewModel @Inject constructor(
         val currentQuestion = interview.questions.lastOrNull() ?: return
         val trimmed = answer.trim()
         if (trimmed.isEmpty() || isBusy) return
-
-        // A finished interview is read-only. Without this, a send that was
-        // already in flight when the last question completed would append a new
-        // answer to a COMPLETED interview, resurrecting it as resumable and
-        // re-charging an evaluation for a question the user never saw.
         if (interview.status == InterviewStatus.COMPLETED) return
 
-        // The lock is taken here, synchronously, and not inside the coroutine
-        // below. It used to be taken by evaluateQuestion, which runs only after
-        // an awaited database write -- so for the duration of that write a second
-        // submit still passed the isBusy guard, overwrote the stored answer, and
-        // added a second copy of the message to the transcript. Voice input made
-        // this reachable: a recognition result landing while the user was also
-        // tapping send.
         isBusy = true
 
         messages.add(ChatMessage(trimmed, isAi = false))
@@ -339,13 +381,6 @@ class InterviewViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Scores one answer and moves the interview on.
-     *
-     * [lockAlreadyHeld] exists because [submitAnswer] takes the lock itself,
-     * before its coroutine starts, to close the window in which a second submit
-     * could pass the guard. Every other caller goes through the guard here.
-     */
     private fun evaluateQuestion(question: InterviewQuestion, lockAlreadyHeld: Boolean = false) {
         val answer = question.answer?.trim().orEmpty()
         if (answer.isEmpty()) return
@@ -396,10 +431,6 @@ class InterviewViewModel @Inject constructor(
 
             val saved = persistProgress()
 
-            // Both branches release the lock and settle `pendingCompletion`
-            // before publishing any state, with no suspension in between. The
-            // interview is complete either way, so the only thing left is
-            // whether the write landed -- and Try Again retries exactly that.
             isBusy = false
             pendingCompletion = !saved
 
@@ -411,12 +442,6 @@ class InterviewViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Persists the current interview (as STARTED) so it can be resumed later.
-     * Suspends until the write completes, returning whether it succeeded.
-     * Used by the Save & Pause flow so the app never navigates away claiming
-     * the interview was saved when it was not.
-     */
     suspend fun saveAndPause(): Boolean {
         voiceService.stopTts()
         val interview = currentInterview ?: return true
@@ -432,8 +457,6 @@ class InterviewViewModel @Inject constructor(
         voiceService.stopTts()
         val interview = currentInterview ?: return
         viewModelScope.launch {
-            // NonCancellable so the save still completes if the ViewModel is
-            // cleared while navigation away is happening.
             withContext(NonCancellable) {
                 if (interview.questions.isEmpty()) {
                     runCatching { repository.deleteInterview(interview.id) }
@@ -463,9 +486,6 @@ class InterviewViewModel @Inject constructor(
         val suggestions = evaluation.suggestions.trim()
         val weaknesses = evaluation.weaknesses.trim()
         return buildString {
-            // The score the model actually returned, so the answer the user is
-            // looking at is the evaluation the backend produced rather than a
-            // summary of it. The full breakdown stays on the report.
             append("Here's my feedback on your answer. ")
             append("Score: ${evaluation.score}/10.")
             if (strengths.isNotEmpty()) {

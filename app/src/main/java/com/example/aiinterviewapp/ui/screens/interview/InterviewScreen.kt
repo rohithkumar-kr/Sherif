@@ -209,6 +209,8 @@ fun InterviewScreen(
         }
     }
 
+    val isResumeGrounded by viewModel.isResumeGrounded.collectAsState()
+
     Scaffold(
         snackbarHost = {
             SnackbarHost(hostState = snackbarHostState)
@@ -224,11 +226,43 @@ fun InterviewScreen(
                                 fontWeight = FontWeight.ExtraBold,
                                 letterSpacing = 2.sp
                             )
-                            Text(
-                                "Session Active",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    "Session Active",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                if (isResumeGrounded) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.AutoAwesome,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(10.dp),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                            Spacer(Modifier.width(3.dp))
+                                            Text(
+                                                "Resume-Grounded",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     },
                     navigationIcon = {
