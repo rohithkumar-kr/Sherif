@@ -3,7 +3,7 @@ package com.example.aiinterviewapp.ui.screens.resume
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
+import com.example.aiinterviewapp.data.local.datastore.ScopedResumeText
 import com.example.aiinterviewapp.domain.model.ResumeExtractionException
 import com.example.aiinterviewapp.domain.model.ResumeProfile
 import com.example.aiinterviewapp.domain.model.ResumeTextOrigin
@@ -67,7 +67,7 @@ data class ResumeUiState(
 @HiltViewModel
 class ResumeViewModel @Inject constructor(
     private val resumeTextExtractor: ResumeTextExtractor,
-    private val authPreferences: AuthPreferences,
+    private val scopedResumeText: ScopedResumeText,
     private val analyzeResume: AnalyzeResumeUseCase,
     private val profileStore: ResumeProfileStore
 ) : ViewModel() {
@@ -77,7 +77,10 @@ class ResumeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            authPreferences.resumeText.collect { text ->
+            // Both flows follow the session, so a sign-out clears the resume
+            // and the analysis together. Watching a single global value would
+            // leave the previous user's profile on screen.
+            scopedResumeText.currentUserResumeText.collect { text ->
                 _uiState.value = _uiState.value.copy(
                     extractedText = text,
                     hasResume = !text.isNullOrBlank()
@@ -87,7 +90,7 @@ class ResumeViewModel @Inject constructor(
         viewModelScope.launch {
             profileStore.resumeProfile().collect { profile ->
                 if (profile != null && _uiState.value.profile == null) {
-                    val text = authPreferences.resumeText.first()
+                    val text = scopedResumeText.currentUserResumeText.first()
                     _uiState.value = _uiState.value.copy(
                         profile = profile,
                         profileSourceText = text
@@ -124,9 +127,10 @@ class ResumeViewModel @Inject constructor(
             val text = extraction.text
 
             // Persist the normalized text immediately, whatever its origin, so
-            // interview question generation keeps working even when Gemini is
-            // unavailable. OCR-derived text is stored identically.
-            authPreferences.setResumeText(text)
+            // interview question generation keeps working even when the analysis
+            // service is unavailable. OCR-derived text is stored identically,
+            // under the signed-in user.
+            scopedResumeText.setResumeText(text)
             _uiState.value = _uiState.value.copy(
                 stage = ResumeStage.ANALYZING,
                 hasResume = true,
@@ -190,7 +194,7 @@ class ResumeViewModel @Inject constructor(
 
     fun deleteResume() {
         viewModelScope.launch {
-            authPreferences.setResumeText(null)
+            scopedResumeText.setResumeText(null)
             profileStore.clearResumeProfile()
             _uiState.value = ResumeUiState()
         }

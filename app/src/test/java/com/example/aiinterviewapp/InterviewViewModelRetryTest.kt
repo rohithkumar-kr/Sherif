@@ -1,6 +1,6 @@
 package com.example.aiinterviewapp
 
-import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
+import com.example.aiinterviewapp.data.local.datastore.ScopedResumeText
 import com.example.aiinterviewapp.data.service.VoiceService
 import com.example.aiinterviewapp.domain.model.Interview
 import com.example.aiinterviewapp.domain.model.InterviewQuestion
@@ -37,7 +37,7 @@ class InterviewViewModelRetryTest {
 
     private lateinit var repository: InterviewRepository
     private lateinit var voiceService: VoiceService
-    private lateinit var authPreferences: AuthPreferences
+    private lateinit var scopedResumeText: ScopedResumeText
 
     private var generateQuestionResults: ArrayDeque<Result<String>> = ArrayDeque()
     private var evaluateAnswerResults: ArrayDeque<Result<QuestionEvaluation>> = ArrayDeque()
@@ -106,8 +106,8 @@ class InterviewViewModelRetryTest {
             }
         }
         voiceService = mock()
-        authPreferences = mock()
-        whenever(authPreferences.resumeText).thenReturn(flowOf(null))
+        scopedResumeText = mock()
+        whenever(scopedResumeText.currentUserResumeText).thenReturn(flowOf(null))
     }
 
     @After
@@ -120,7 +120,7 @@ class InterviewViewModelRetryTest {
         evaluateAnswerUseCase = EvaluateAnswerUseCase(repository),
         repository = repository,
         voiceService = voiceService,
-        authPreferences = authPreferences
+        scopedResumeText = scopedResumeText
     )
 
     private fun defaultEvaluation() = QuestionEvaluation(

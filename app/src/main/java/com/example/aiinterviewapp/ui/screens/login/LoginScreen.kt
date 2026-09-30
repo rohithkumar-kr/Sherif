@@ -1,5 +1,6 @@
 package com.example.aiinterviewapp.ui.screens.login
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,16 +12,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -41,6 +42,9 @@ fun LoginScreen(
             onLoginSuccess()
         }
     }
+
+    val uiState by viewModel.uiState.collectAsState()
+    val activity = LocalActivity.current
 
     Box(
         modifier = Modifier
@@ -89,30 +93,45 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // One sign-in path only. "Continue as Guest" is gone: a guest
+                // session has no verified identity, so its data could not be
+                // scoped to a user and would be visible to the next person to
+                // open the app.
+                uiState.errorMessage?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                    )
+                }
+
                 SherifButton(
-                    text = "Continue with Google",
-                    onClick = { viewModel.loginWithGoogle() },
+                    text = if (uiState.isLoading) "Signing in…" else "Continue with Google",
+                    onClick = { activity?.let(viewModel::loginWithGoogle) },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     icon = Icons.Default.AccountCircle
                 )
 
-                OutlinedButton(
-                    onClick = { viewModel.loginAsGuest() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Text(
-                        text = "Continue as Guest",
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                    Spacer(Modifier.size(4.dp))
-                    Icon(
-                        Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
+                // Development entry. A TextButton, not a SherifButton, so it is
+                // visibly secondary to the only real sign-in path above it.
+                //
+                // The condition is a compile-time constant in release, so this
+                // block and everything it references is removed from a release
+                // build rather than merely not drawn.
+                if (viewModel.isDevelopmentEntryAvailable) {
+                    TextButton(
+                        onClick = viewModel::signInForDevelopment,
+                        enabled = !uiState.isLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Continue in Development Mode",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(4.dp))

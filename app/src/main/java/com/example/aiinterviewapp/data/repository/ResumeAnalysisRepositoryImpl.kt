@@ -3,11 +3,11 @@ package com.example.aiinterviewapp.data.repository
 import com.example.aiinterviewapp.data.remote.AiResponseParser
 import com.example.aiinterviewapp.data.remote.ResumeAnalysisPrompts
 import com.example.aiinterviewapp.data.remote.ResumeGrounding
-import com.example.aiinterviewapp.data.remote.api.GeminiApi
+import com.example.aiinterviewapp.data.remote.api.SherifBackendApi
 import com.example.aiinterviewapp.data.remote.model.GeminiRequest
 import com.example.aiinterviewapp.data.remote.model.GeminiSchemas
 import com.example.aiinterviewapp.data.remote.model.getText
-import com.example.aiinterviewapp.data.remote.withGeminiErrorMapping
+import com.example.aiinterviewapp.data.remote.withSherifErrorMapping
 import com.example.aiinterviewapp.domain.model.ResumeAnalysis
 import com.example.aiinterviewapp.domain.model.ResumeProfile
 import com.example.aiinterviewapp.domain.model.hasContent
@@ -17,15 +17,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Resume analysis against Gemini.
+ * Resume analysis, via SHERIF's backend.
  *
- * This is a standalone operation with its own prompt, its own response schema
- * and its own model type. It shares only the HTTP client with question
- * generation and never routes through it.
+ * A standalone operation with its own prompt, its own response schema and its
+ * own endpoint. It never routes through question generation, and it holds no
+ * Gemini credential of its own (RULE 3, RULE 20).
  */
 @Singleton
 class ResumeAnalysisRepositoryImpl @Inject constructor(
-    private val api: GeminiApi,
+    private val api: SherifBackendApi,
     private val json: Json
 ) : ResumeAnalysisRepository {
 
@@ -34,7 +34,7 @@ class ResumeAnalysisRepositoryImpl @Inject constructor(
             throw IllegalArgumentException("There is no resume text to analyze.")
         }
 
-        val response = api.generateContent(
+        val response = api.analyzeResume(
             GeminiRequest.create(
                 ResumeAnalysisPrompts.build(resumeText),
                 temperature = 0.2,
@@ -45,11 +45,11 @@ class ResumeAnalysisRepositoryImpl @Inject constructor(
         )
 
         val raw = response.getText()
-            ?: throw IllegalStateException("Gemini returned an empty response. Please try again.")
+            ?: throw IllegalStateException("The resume service returned an empty response. Please try again.")
 
         val jsonObject = AiResponseParser.extractJsonObject(raw)
             ?: throw IllegalStateException(
-                "Gemini returned a response that could not be read as a resume analysis. Please try again."
+                "The resume service returned a response that could not be read as a resume analysis. Please try again."
             )
 
         val decoded = json.decodeFromString<ResumeProfile>(jsonObject)
@@ -57,9 +57,9 @@ class ResumeAnalysisRepositoryImpl @Inject constructor(
         val (grounded, report) = ResumeGrounding.ground(decoded, resumeText)
         if (!grounded.hasContent) {
             throw IllegalStateException(
-                "Gemini did not find any verifiable information in this resume. Please try again."
+                "No verifiable information was found in this resume. Please try again."
             )
         }
         ResumeAnalysis(profile = grounded, unsupportedClaims = report.unsupportedClaims)
-    }.withGeminiErrorMapping()
+    }.withSherifErrorMapping()
 }

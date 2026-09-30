@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    SHERIF hands exactly one kind of file to another app: a generated report.
+
+    This used to be `<cache-path name="cache" path="." />`, which granted a
+    receiving app a readable path to *everything* the app has cached for as
+    long as it held the URI. A share target chosen by the user - not only the
+    user - could then read the temporary files that OCR and PDF import leave
+    behind, and those contain the raw content of documents the user chose to
+    analyse. Naming a single subdirectory means a share grant covers the report
+    and nothing else.
+-->
 <paths>
-    <cache-path name="cache" path="." />
+    <cache-path
+        name="exports"
+        path="exports/" />
 </paths>

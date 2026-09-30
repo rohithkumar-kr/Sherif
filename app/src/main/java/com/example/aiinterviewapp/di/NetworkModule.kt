@@ -1,14 +1,21 @@
 package com.example.aiinterviewapp.di
 
 import com.example.aiinterviewapp.BuildConfig
-import com.example.aiinterviewapp.data.remote.api.GeminiApi
+import com.example.aiinterviewapp.data.local.datastore.SessionStore
+import com.example.aiinterviewapp.data.local.datastore.SessionTokenCache
+import com.example.aiinterviewapp.data.remote.RetryInterceptor
+import com.example.aiinterviewapp.data.remote.SessionAuthInterceptor
+import com.example.aiinterviewapp.data.remote.SessionExpiryInterceptor
+import com.example.aiinterviewapp.data.remote.api.SherifBackendApi
 import com.example.aiinterviewapp.utils.Constants
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
-import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -32,64 +39,67 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(): OkHttpClient {
+    fun provideOkHttpClient(
+        authInterceptor: SessionAuthInterceptor,
+        retryInterceptor: RetryInterceptor,
+        sessionExpiryInterceptor: SessionExpiryInterceptor
+    ): OkHttpClient {
         val loggingInterceptor = HttpLoggingInterceptor().apply {
             level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
-            redactHeader("x-goog-api-key")
-        }
-
-        val authInterceptor = Interceptor { chain ->
-            val original = chain.request()
-            val request = original.newBuilder()
-                .header("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
-                .build()
-            chain.proceed(request)
-        }
-
-        val retryInterceptor = Interceptor { chain ->
-            var response = chain.proceed(chain.request())
-            var tryCount = 0
-            val maxLimit = 3
-
-            // Retry rate-limit (429) and transient server errors (5xx) with
-            // exponential backoff. Requests are never retried when the body
-            // has already been consumed by an upstream interceptor.
-            val requestBody = chain.request().body
-            while (
-                !response.isSuccessful &&
-                tryCount < maxLimit &&
-                (response.code == 429 || response.code in 500..599) &&
-                (requestBody == null || !requestBody.isOneShot())
-            ) {
-                tryCount++
-                val waitTime = Math.pow(2.0, tryCount.toDouble()).toLong() * 1000
-                Thread.sleep(waitTime)
-                response.close()
-                response = chain.proceed(chain.request())
-            }
-            response
+            // The session token is the credential now, so it gets the same
+            // redaction the Gemini key used to get. RULE 12: no credential in
+            // a log line, in any build.
+            redactHeader("Authorization")
         }
 
         return OkHttpClient.Builder()
             .addInterceptor(loggingInterceptor)
+            // Order is load-bearing.
+            //
+            // Auth runs first so the retry loop below re-sends the request with
+            // its Authorization header already attached, rather than replaying
+            // the unauthenticated original.
             .addInterceptor(authInterceptor)
             .addInterceptor(retryInterceptor)
+            // Last, so it only ever sees a final response. Putting it earlier
+            // would report an expiry for a 401 that the retry loop was about to
+            // deal with, and sign a user out over a recoverable request.
+            .addInterceptor(sessionExpiryInterceptor)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            // The read timeout is 60s and the retry budget adds at most two
+            // backoffs, so the call timeout has to leave room for all three
+            // attempts. At 90s the third attempt can still land inside it.
             .callTimeout(90, TimeUnit.SECONDS)
             .build()
     }
 
+    /**
+     * The token mirror OkHttp reads synchronously.
+     *
+     * Built from [SessionStore.accessToken] rather than being written to by the
+     * repository, so sign-in, sign-out and expiry all update it through the one
+     * path that already owns the value. A cache maintained by hand alongside
+     * the store is a cache that eventually disagrees with it.
+     */
     @Provides
     @Singleton
-    fun provideGeminiApi(okHttpClient: OkHttpClient, json: Json): GeminiApi {
+    fun provideSessionTokenCache(sessionStore: SessionStore): SessionTokenCache =
+        SessionTokenCache(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            source = sessionStore.accessToken
+        )
+
+    @Provides
+    @Singleton
+    fun provideSherifBackendApi(okHttpClient: OkHttpClient, json: Json): SherifBackendApi {
         val contentType = "application/json".toMediaType()
         return Retrofit.Builder()
-            .baseUrl(Constants.BASE_URL)
+            .baseUrl(Constants.SHERIF_API_BASE_URL)
             .client(okHttpClient)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()
-            .create(GeminiApi::class.java)
+            .create(SherifBackendApi::class.java)
     }
 }

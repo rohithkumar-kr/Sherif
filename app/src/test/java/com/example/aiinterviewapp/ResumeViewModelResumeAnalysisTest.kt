@@ -1,7 +1,7 @@
 package com.example.aiinterviewapp
 
 import android.net.Uri
-import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
+import com.example.aiinterviewapp.data.local.datastore.ScopedResumeText
 import com.example.aiinterviewapp.domain.model.ResumeAnalysis
 import com.example.aiinterviewapp.domain.model.ResumeDocumentType
 import com.example.aiinterviewapp.domain.model.ResumeExtraction
@@ -46,7 +46,7 @@ class ResumeViewModelResumeAnalysisTest {
     private lateinit var textSource: RecordingTextExtractor
     private lateinit var store: RecordingProfileStore
     private lateinit var analysisRepository: ScriptedAnalysisRepository
-    private lateinit var authPreferences: AuthPreferences
+    private lateinit var scopedResumeText: ScopedResumeText
     private lateinit var resumeText: MutableStateFlow<String?>
 
     private val androidProfile = ResumeProfile(
@@ -82,13 +82,13 @@ class ResumeViewModelResumeAnalysisTest {
         textSource = RecordingTextExtractor(text) { viewModelRef.uiState.value.stage }
         store = RecordingProfileStore()
         analysisRepository = ScriptedAnalysisRepository { viewModelRef.uiState.value.stage }
-        authPreferences = mock()
+        scopedResumeText = mock()
         resumeText = MutableStateFlow(null)
-        whenever(authPreferences.resumeText).thenReturn(resumeText)
+        whenever(scopedResumeText.currentUserResumeText).thenReturn(resumeText)
 
         viewModelRef = ResumeViewModel(
             resumeTextExtractor = textSource,
-            authPreferences = authPreferences,
+            scopedResumeText = scopedResumeText,
             analyzeResume = AnalyzeResumeUseCase(analysisRepository),
             profileStore = store
         )
@@ -179,7 +179,7 @@ class ResumeViewModelResumeAnalysisTest {
         }
         val failingViewModel = ResumeViewModel(
             resumeTextExtractor = failing,
-            authPreferences = authPreferences,
+            scopedResumeText = scopedResumeText,
             analyzeResume = AnalyzeResumeUseCase(analysisRepository),
             profileStore = store
         )
@@ -363,7 +363,7 @@ class ResumeViewModelResumeAnalysisTest {
         viewModelRef.uploadResume(uri())
         advanceUntilIdle()
 
-        verify(authPreferences).setResumeText(androidText)
+        verify(scopedResumeText).setResumeText(androidText)
         assertTrue(viewModelRef.uiState.value.hasResume)
     }
 

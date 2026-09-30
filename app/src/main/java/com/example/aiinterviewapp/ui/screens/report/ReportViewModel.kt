@@ -56,16 +56,20 @@ class ReportViewModel @Inject constructor(
             _isExporting.value = true
             try {
                 val file = withContext(Dispatchers.IO) {
-                    runCatching { pdfExportService.exportReportToPdf(interview) }.getOrNull()
+                    pdfExportService.exportReportToPdf(interview)
                 }
-                if (file != null) {
-                    val shared = pdfExportService.sharePdf(file)
-                    if (!shared) {
-                        _feedback.value = FeedbackMessage("Couldn't share the PDF report. Please try again.")
+                file.fold(
+                    onSuccess = { generated ->
+                        // The service has already logged why, so the message
+                        // here only has to be the user-facing half.
+                        pdfExportService.sharePdf(generated).onFailure {
+                            _feedback.value = FeedbackMessage("Couldn't share the PDF report. Please try again.")
+                        }
+                    },
+                    onFailure = {
+                        _feedback.value = FeedbackMessage("Couldn't generate the PDF report. Please try again.")
                     }
-                } else {
-                    _feedback.value = FeedbackMessage("Couldn't generate the PDF report. Please try again.")
-                }
+                )
             } finally {
                 _isExporting.value = false
             }

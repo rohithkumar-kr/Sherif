@@ -22,7 +22,14 @@ object DatabaseModule {
             context,
             AppDatabase::class.java,
             "ai_interview_db"
-        ).addMigrations(AppDatabase.MIGRATION_1_2).build()
+            // Every migration is listed explicitly. There is deliberately no
+            // fallbackToDestructiveMigration: a missing migration would then
+            // silently delete a user's interview history, which is data loss
+            // rather than an upgrade (RULE 15).
+        ).addMigrations(
+            AppDatabase.MIGRATION_1_2,
+            AppDatabase.MIGRATION_2_3
+        ).build()
     }
 
     @Provides

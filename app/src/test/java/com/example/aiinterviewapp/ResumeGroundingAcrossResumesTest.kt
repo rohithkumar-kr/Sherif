@@ -1,6 +1,5 @@
 package com.example.aiinterviewapp
 
-import com.example.aiinterviewapp.data.remote.api.GeminiApi
 import com.example.aiinterviewapp.data.remote.model.GeminiRequest
 import com.example.aiinterviewapp.data.remote.model.GeminiResponse
 import com.example.aiinterviewapp.data.repository.ResumeAnalysisRepositoryImpl
@@ -26,11 +25,17 @@ class ResumeGroundingAcrossResumesTest {
         isLenient = true
     }
 
-    private class ScriptedGeminiApi(
+    /**
+     * Answers with whichever scripted response matches the resume text that
+     * actually arrived, so a test that swaps resumes cannot accidentally be
+     * answered from the other script.
+     */
+    private class ScriptedBackendApi(
         private val responses: Map<String, String>
-    ) : GeminiApi {
+    ) : com.example.aiinterviewapp.data.remote.api.SherifBackendApi {
         val requests = mutableListOf<GeminiRequest>()
-        override suspend fun generateContent(request: GeminiRequest): GeminiResponse {
+
+        private fun scriptFor(request: GeminiRequest): GeminiResponse {
             requests.add(request)
             val text = request.contents.single().parts.single().text
             val body = responses.entries.first { text.contains(it.key) }.value
@@ -42,6 +47,24 @@ class ResumeGroundingAcrossResumesTest {
                 )
             )
         }
+
+        override suspend fun analyzeResume(request: GeminiRequest): GeminiResponse = scriptFor(request)
+        override suspend fun generateQuestion(request: GeminiRequest): GeminiResponse = scriptFor(request)
+        override suspend fun evaluateAnswer(request: GeminiRequest): GeminiResponse = scriptFor(request)
+        override suspend fun createSession(
+            request: com.example.aiinterviewapp.data.remote.model.BackendSessionRequest
+        ) = com.example.aiinterviewapp.data.remote.model.BackendSessionResponse(
+            accessToken = "test-access-token",
+            userId = "test-user",
+            expiresAt = Long.MAX_VALUE
+        )
+
+        override suspend fun createDevelopmentSession() =
+            com.example.aiinterviewapp.data.remote.model.BackendSessionResponse(
+                accessToken = "test-dev-access-token",
+                userId = "dev:local",
+                expiresAt = Long.MAX_VALUE
+            )
     }
 
     private val resumeA = """
@@ -101,7 +124,7 @@ class ResumeGroundingAcrossResumesTest {
 
     @Test
     fun `two different resumes produce materially different profiles`() = runTest {
-        val api = ScriptedGeminiApi(
+        val api = ScriptedBackendApi(
             mapOf(
                 "Japanese Vocabulary App" to analysisA,
                 "Time Series Forecasting" to analysisB
@@ -140,7 +163,7 @@ class ResumeGroundingAcrossResumesTest {
 
     @Test
     fun `a skill invented for resume B is not kept as fact`() = runTest {
-        val api = ScriptedGeminiApi(mapOf("Time Series Forecasting" to analysisB))
+        val api = ScriptedBackendApi(mapOf("Time Series Forecasting" to analysisB))
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val b = repository.analyzeResume(resumeB).getOrThrow()
@@ -154,7 +177,7 @@ class ResumeGroundingAcrossResumesTest {
 
     @Test
     fun `each analysis request carries its own resume text`() = runTest {
-        val api = ScriptedGeminiApi(
+        val api = ScriptedBackendApi(
             mapOf(
                 "Japanese Vocabulary App" to analysisA,
                 "Time Series Forecasting" to analysisB

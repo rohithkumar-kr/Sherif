@@ -1,9 +1,7 @@
 package com.example.aiinterviewapp
 
-import com.example.aiinterviewapp.data.remote.model.GeminiRequest
 import com.example.aiinterviewapp.data.remote.model.GeminiResponse
 import com.example.aiinterviewapp.data.repository.ResumeAnalysisRepositoryImpl
-import com.example.aiinterviewapp.data.remote.api.GeminiApi
 import com.example.aiinterviewapp.domain.model.ResumeAnalysis
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -24,20 +22,6 @@ class ResumeAnalysisRepositoryImplTest {
         isLenient = true
     }
 
-    /** Captures every outbound request so tests can assert on the real payload. */
-    private class CapturingGeminiApi(
-        private val responseProvider: () -> GeminiResponse
-    ) : GeminiApi {
-        val requests = mutableListOf<GeminiRequest>()
-        override suspend fun generateContent(request: GeminiRequest): GeminiResponse {
-            requests.add(request)
-            return responseProvider()
-        }
-    }
-
-    private class ThrowingGeminiApi(private val error: Throwable) : GeminiApi {
-        override suspend fun generateContent(request: GeminiRequest): GeminiResponse = throw error
-    }
 
     private fun responseWith(text: String) = GeminiResponse(
         candidates = listOf(
@@ -80,16 +64,16 @@ class ResumeAnalysisRepositoryImplTest {
     """.trimIndent()
 
     @Test
-    fun `actual resume text reaches Gemini in the analysis request`() = runTest {
+    fun `actual resume text reaches the backend in the analysis request`() = runTest {
         val token = "UNIQUE_RESUME_TEST_TOKEN_847291"
-        val api = CapturingGeminiApi { responseWith(validAndroidAnalysis) }
+        val api = FakeSherifBackendApi { responseWith(validAndroidAnalysis) }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         repository.analyzeResume("$androidResume\nReference: $token")
 
         val sentText = api.requests.single().contents.single().parts.single().text
         assertTrue(
-            "Captured Gemini request did not contain the resume token",
+            "Captured request did not contain the resume token",
             sentText.contains(token)
         )
         assertTrue(sentText.contains("Japanese Vocabulary App"))
@@ -98,7 +82,7 @@ class ResumeAnalysisRepositoryImplTest {
 
     @Test
     fun `analysis uses its own dedicated schema and not the question schema`() = runTest {
-        val api = CapturingGeminiApi { responseWith(validAndroidAnalysis) }
+        val api = FakeSherifBackendApi { responseWith(validAndroidAnalysis) }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         repository.analyzeResume(androidResume)
@@ -111,8 +95,17 @@ class ResumeAnalysisRepositoryImplTest {
     }
 
     @Test
-    fun `valid Gemini analysis produces a grounded profile`() = runTest {
-        val api = CapturingGeminiApi { responseWith(validAndroidAnalysis) }
+    fun `analysis goes to the resume endpoint, never the interview ones`() = runTest {
+        val api = FakeSherifBackendApi { responseWith(validAndroidAnalysis) }
+
+        ResumeAnalysisRepositoryImpl(api, json).analyzeResume(androidResume)
+
+        assertEquals(listOf("resume/analyze"), api.endpointsUsed)
+    }
+
+    @Test
+    fun `valid analysis response produces a grounded profile`() = runTest {
+        val api = FakeSherifBackendApi { responseWith(validAndroidAnalysis) }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val result = repository.analyzeResume(androidResume)
@@ -125,8 +118,8 @@ class ResumeAnalysisRepositoryImplTest {
     }
 
     @Test
-    fun `malformed Gemini response fails without fabricating a profile`() = runTest {
-        val api = CapturingGeminiApi { responseWith("I'm sorry, I cannot help with that.") }
+    fun `malformed analysis response fails without fabricating a profile`() = runTest {
+        val api = FakeSherifBackendApi { responseWith("I'm sorry, I cannot help with that.") }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val result = repository.analyzeResume(androidResume)
@@ -137,7 +130,7 @@ class ResumeAnalysisRepositoryImplTest {
 
     @Test
     fun `truncated json fails without fabricating a profile`() = runTest {
-        val api = CapturingGeminiApi { responseWith("""{"candidateName": "Aarav", "technicalSkills": ["Ko""") }
+        val api = FakeSherifBackendApi { responseWith("""{"candidateName": "Aarav", "technicalSkills": ["Ko""") }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val result = repository.analyzeResume(androidResume)
@@ -146,8 +139,8 @@ class ResumeAnalysisRepositoryImplTest {
     }
 
     @Test
-    fun `empty Gemini response fails without fabricating a profile`() = runTest {
-        val api = CapturingGeminiApi { GeminiResponse(candidates = emptyList()) }
+    fun `empty analysis response fails without fabricating a profile`() = runTest {
+        val api = FakeSherifBackendApi { GeminiResponse(candidates = emptyList()) }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val result = repository.analyzeResume(androidResume)
@@ -156,8 +149,8 @@ class ResumeAnalysisRepositoryImplTest {
     }
 
     @Test
-    fun `blank resume text fails before any Gemini call`() = runTest {
-        val api = CapturingGeminiApi { responseWith(validAndroidAnalysis) }
+    fun `blank resume text fails before any backend call`() = runTest {
+        val api = FakeSherifBackendApi { responseWith(validAndroidAnalysis) }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val result = repository.analyzeResume("   ")
@@ -168,7 +161,7 @@ class ResumeAnalysisRepositoryImplTest {
 
     @Test
     fun `an analysis with nothing verifiable fails rather than returning an empty profile`() = runTest {
-        val api = CapturingGeminiApi {
+        val api = FakeSherifBackendApi {
             responseWith("""{"candidateName": "", "summary": "", "technicalSkills": [], "strengths": []}""")
         }
         val repository = ResumeAnalysisRepositoryImpl(api, json)
@@ -179,24 +172,24 @@ class ResumeAnalysisRepositoryImplTest {
     }
 
     @Test
-    fun `Gemini HTTP failure produces a mapped error and no profile`() = runTest {
-        val api = ThrowingGeminiApi(HttpException(Response.error<Any>(429, "{}".toResponseBody())))
+    fun `backend HTTP failure produces a mapped error and no profile`() = runTest {
+        val api = FakeSherifBackendApi(error = HttpException(Response.error<Any>(429, "{}".toResponseBody())))
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val result = repository.analyzeResume(androidResume)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()!!.message!!.contains("rate limit"))
+        assertTrue(result.exceptionOrNull()!!.message!!.contains("Too many requests"))
     }
 
     @Test
     fun `network failure produces a mapped error and no profile`() = runTest {
-        val api = ThrowingGeminiApi(IOException("socket timeout"))
+        val api = FakeSherifBackendApi(error = IOException("socket timeout"))
         val repository = ResumeAnalysisRepositoryImpl(api, json)
 
         val result = repository.analyzeResume(androidResume)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()!!.message!!.contains("No internet connection"))
+        assertTrue(result.exceptionOrNull()!!.message!!.contains("temporarily unavailable"))
     }
 }

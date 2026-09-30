@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.example.aiinterviewapp.data.local.datastore.DataStoreResumeProfileStore
+import com.example.aiinterviewapp.data.local.datastore.ScopedResumeText
 import com.example.aiinterviewapp.domain.model.ResumeEducation
 import com.example.aiinterviewapp.domain.model.ResumeProfile
 import com.example.aiinterviewapp.domain.model.ResumeProject
@@ -36,12 +37,26 @@ private class FakePreferencesDataStore : DataStore<Preferences> {
 }
 
 /**
- * The resume text key used by AuthPreferences. Duplicated here deliberately so
- * this test can prove the profile store never disturbs it.
+ * The resume-text key for [ResumeProfileStoreTest.USER_A], taken from production
+ * code rather than retyped.
+ *
+ * Phase 2's test hardcoded the string `resume_text`. It now references the real
+ * scoped key, so this test keeps proving what it claims: that saving a profile
+ * leaves the user's resume text untouched. A copied literal would pass even if
+ * the store started writing to a different key.
  */
-private val resumeTextKey = stringPreferencesKey("resume_text")
+private val resumeTextKey = ScopedResumeText.keyFor(ResumeProfileStoreTest.USER_A)
 
 class ResumeProfileStoreTest {
+
+    /**
+     * The signed-in user for these persistence tests.
+     *
+     * The store is now session-scoped, so "a profile exists" means "a profile
+     * exists *for whoever is signed in*". User isolation gets its own test
+     * class; here the point is that persistence itself still works.
+     */
+    private val session = fakeSessionStore(USER_A)
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -65,14 +80,17 @@ class ResumeProfileStoreTest {
         projects = listOf(ResumeProject(name = "Time Series Forecasting", technologies = listOf("TensorFlow")))
     )
 
+    private fun store(dataStore: FakePreferencesDataStore = FakePreferencesDataStore()) =
+        DataStoreResumeProfileStore(session, dataStore, json)
+
     @Test
     fun `profile survives store and process recreation`() = runTest {
         val dataStore = FakePreferencesDataStore()
-        DataStoreResumeProfileStore(dataStore, json).saveResumeProfile(profileA)
+        store(dataStore).saveResumeProfile(profileA)
 
         // A brand new store instance stands in for a new process reading the
         // same on-disk DataStore.
-        val afterRecreation = DataStoreResumeProfileStore(dataStore, json).resumeProfile().first()
+        val afterRecreation = store(dataStore).resumeProfile().first()
 
         assertEquals(profileA, afterRecreation)
     }
@@ -80,9 +98,9 @@ class ResumeProfileStoreTest {
     @Test
     fun `every persisted field is restored unchanged`() = runTest {
         val dataStore = FakePreferencesDataStore()
-        DataStoreResumeProfileStore(dataStore, json).saveResumeProfile(profileA)
+        store(dataStore).saveResumeProfile(profileA)
 
-        val restored = DataStoreResumeProfileStore(dataStore, json).resumeProfile().first()!!
+        val restored = store(dataStore).resumeProfile().first()!!
 
         assertEquals(profileA.candidateName, restored.candidateName)
         assertEquals(profileA.targetRole, restored.targetRole)
@@ -95,7 +113,7 @@ class ResumeProfileStoreTest {
     @Test
     fun `replacing the profile leaves only the new one`() = runTest {
         val dataStore = FakePreferencesDataStore()
-        val store = DataStoreResumeProfileStore(dataStore, json)
+        val store = store(dataStore)
         store.saveResumeProfile(profileA)
         store.saveResumeProfile(profileB)
 
@@ -110,7 +128,7 @@ class ResumeProfileStoreTest {
     @Test
     fun `clear removes the stored profile`() = runTest {
         val dataStore = FakePreferencesDataStore()
-        val store = DataStoreResumeProfileStore(dataStore, json)
+        val store = store(dataStore)
         store.saveResumeProfile(profileA)
 
         store.clearResumeProfile()
@@ -123,7 +141,7 @@ class ResumeProfileStoreTest {
         val dataStore = FakePreferencesDataStore()
         dataStore.edit { it[resumeTextKey] = "Kotlin Jetpack Compose Room" }
 
-        DataStoreResumeProfileStore(dataStore, json).saveResumeProfile(profileA)
+        store(dataStore).saveResumeProfile(profileA)
 
         assertEquals("Kotlin Jetpack Compose Room", dataStore.raw()[resumeTextKey])
     }
@@ -131,17 +149,24 @@ class ResumeProfileStoreTest {
     @Test
     fun `a corrupted stored payload degrades to null instead of throwing`() = runTest {
         val dataStore = FakePreferencesDataStore()
-        dataStore.edit { it[stringPreferencesKey("resume_profile")] = "{not valid json" }
+        // Written to the real scoped key. Corrupting some other key would let
+        // this test pass without ever exercising the decode path.
+        dataStore.edit { it[DataStoreResumeProfileStore.keyFor(USER_A)] = "{not valid json" }
 
-        val profile = DataStoreResumeProfileStore(dataStore, json).resumeProfile().first()
+        val profile = store(dataStore).resumeProfile().first()
 
         assertNull(profile)
     }
 
     @Test
     fun `an empty store reports no profile`() = runTest {
-        val profile = DataStoreResumeProfileStore(FakePreferencesDataStore(), json).resumeProfile().first()
+        val profile = store().resumeProfile().first()
 
         assertNull(profile)
+    }
+
+    companion object {
+        /** The single user these persistence tests run as. */
+        const val USER_A = "user-a"
     }
 }

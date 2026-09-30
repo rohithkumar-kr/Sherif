@@ -1,27 +1,46 @@
 package com.example.aiinterviewapp.data.repository
 
 import com.example.aiinterviewapp.data.local.dao.InterviewDao
+import com.example.aiinterviewapp.data.local.datastore.SessionStore
 import com.example.aiinterviewapp.data.local.entity.InterviewEntity
 import com.example.aiinterviewapp.data.local.entity.toDomain
 import com.example.aiinterviewapp.data.remote.AiResponseParser
-import com.example.aiinterviewapp.data.remote.withGeminiErrorMapping
-import com.example.aiinterviewapp.data.remote.api.GeminiApi
+import com.example.aiinterviewapp.data.remote.api.SherifBackendApi
 import com.example.aiinterviewapp.data.remote.model.GeminiRequest
 import com.example.aiinterviewapp.data.remote.model.GeminiSchemas
 import com.example.aiinterviewapp.data.remote.model.getText
+import com.example.aiinterviewapp.data.remote.model.SherifBackendException
+import com.example.aiinterviewapp.data.remote.model.SherifErrorCode
+import com.example.aiinterviewapp.data.remote.withSherifErrorMapping
 import com.example.aiinterviewapp.domain.model.Interview
 import com.example.aiinterviewapp.domain.model.QuestionEvaluation
 import com.example.aiinterviewapp.domain.repository.InterviewRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Interview generation, evaluation and local history.
+ *
+ * The AI calls now go to SHERIF's backend, one endpoint each, so the app never
+ * holds a Gemini credential (RULE 2). Question generation and answer evaluation
+ * stay separate operations with their own prompts and schemas (RULE 3).
+ *
+ * Every local read and write is filtered by the signed-in user, resolved from
+ * the session rather than passed in. When there is no session the repository
+ * returns nothing instead of falling back to an unscoped query, which is the
+ * difference between "signed out" and "signed in as the wrong person"
+ * (RULE 10).
+ */
 @Singleton
 class InterviewRepositoryImpl @Inject constructor(
-    private val api: GeminiApi,
+    private val api: SherifBackendApi,
     private val dao: InterviewDao,
+    private val sessionStore: SessionStore,
     private val json: Json
 ) : InterviewRepository {
 
@@ -65,7 +84,7 @@ class InterviewRepositoryImpl @Inject constructor(
             appendLine("Return ONLY a JSON object in exactly this shape: {\"question\": \"...\"}. The question value must be a single question with no numbering, prefixes, markdown or explanations.")
         }.trimIndent()
 
-        val response = api.generateContent(
+        val response = api.generateQuestion(
             GeminiRequest.create(
                 prompt,
                 temperature = 0.7,
@@ -75,8 +94,8 @@ class InterviewRepositoryImpl @Inject constructor(
             )
         )
         AiResponseParser.parseQuestion(response.getText(), json)
-            ?: throw Exception("Gemini returned an empty or unreadable question. Please try again.")
-    }.withGeminiErrorMapping()
+            ?: throw Exception("The interview service returned an empty or unreadable question. Please try again.")
+    }.withSherifErrorMapping()
 
     override suspend fun evaluateAnswer(
         question: String,
@@ -104,7 +123,7 @@ class InterviewRepositoryImpl @Inject constructor(
             Do not include markdown code fences, comments or any other text.
         """.trimIndent()
 
-        val response = api.generateContent(
+        val response = api.evaluateAnswer(
             GeminiRequest.create(
                 prompt,
                 temperature = 0.2,
@@ -114,11 +133,19 @@ class InterviewRepositoryImpl @Inject constructor(
             )
         )
         AiResponseParser.parseEvaluation(response.getText(), json).getOrThrow()
-    }.withGeminiErrorMapping()
+    }.withSherifErrorMapping()
 
     override suspend fun saveInterview(interview: Interview) {
+        val userId = requireUserId() ?: throw SherifBackendException(
+            SherifErrorCode.UNAUTHENTICATED,
+            SherifBackendException.messageFor(SherifErrorCode.UNAUTHENTICATED)
+        )
         val entity = InterviewEntity(
             id = interview.id,
+            // Ownership is taken from the session, not from the domain object.
+            // A domain object crossing a boundary could carry any userId; the
+            // session is the one value the app can trust here.
+            userId = userId,
             role = interview.role,
             type = interview.type,
             difficulty = interview.difficulty,
@@ -132,25 +159,50 @@ class InterviewRepositoryImpl @Inject constructor(
         dao.insertInterview(entity)
     }
 
-    override fun getInterviewHistory(): Flow<List<Interview>> {
-        return dao.getCompletedInterviews().map { entities ->
-            entities.map { it.toDomain() }
+    override fun getInterviewHistory(): Flow<List<Interview>> =
+        sessionStore.userId.flatMapLatest { owner ->
+            val userId = owner
+            if (userId == null) {
+                flowOf(emptyList())
+            } else {
+                dao.getCompletedInterviews(userId).map { entities ->
+                    entities.map { it.toDomain() }
+                }
+            }
         }
-    }
 
     override suspend fun getInterviewById(id: String): Interview? {
-        return dao.getInterviewById(id)?.toDomain()
+        val userId = requireUserId() ?: return null
+        return dao.getInterviewById(id, userId)?.toDomain()
     }
 
     override suspend fun getResumableInterview(): Interview? {
-        return dao.getResumableInterview()?.toDomain()
+        val userId = requireUserId() ?: return null
+        return dao.getResumableInterview(userId)?.toDomain()
     }
 
-    override fun getResumableInterviewFlow(): Flow<Interview?> {
-        return dao.getResumableInterviewFlow().map { it?.toDomain() }
-    }
+    override fun getResumableInterviewFlow(): Flow<Interview?> =
+        sessionStore.userId.flatMapLatest { owner ->
+            val userId = owner
+            if (userId == null) {
+                flowOf(null)
+            } else {
+                dao.getResumableInterviewFlow(userId).map { it?.toDomain() }
+            }
+        }
 
     override suspend fun deleteInterview(id: String) {
-        dao.deleteInterview(id)
+        val userId = requireUserId() ?: return
+        dao.deleteInterview(id, userId)
     }
+
+    /**
+     * The signed-in user, or null when there is no valid session.
+     *
+     * Callers treat null as "no data" instead of falling back to an unscoped
+     * query. That is deliberate: an unscoped fallback is precisely the bug
+     * Phase 3 exists to prevent, and an empty result is a much less dangerous
+     * failure than another person's history.
+     */
+    private suspend fun requireUserId(): String? = sessionStore.currentUserId()
 }

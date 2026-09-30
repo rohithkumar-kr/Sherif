@@ -1,12 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
+    <!--
+      Interviews and resume text are personal data tied to one Google account,
+      and they never leave the device (RULE 11, RULE 17).
+
+      Both directions are excluded. Cloud backup would publish one person's
+      interview history; device-to-device transfer would move that history onto
+      a different device, where a second person could sign in and read it
+      before the first person returns. Neither is a risk worth accepting for
+      data the app can regenerate locally.
+
+      Excluding the database is what stops that. Phase 2 excluded only DataStore,
+      which covered the session and resume text but left every interview,
+      answer and score in the backup.
+    -->
     <cloud-backup>
-        <!-- Resume text and auth state are personal data; never back them up. -->
         <exclude domain="file" path="datastore/" />
         <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="datastore/" />
         <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
     </device-transfer>
 </data-extraction-rules>

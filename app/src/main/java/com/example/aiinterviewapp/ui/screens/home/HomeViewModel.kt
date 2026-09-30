@@ -2,7 +2,7 @@ package com.example.aiinterviewapp.ui.screens.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
+import com.example.aiinterviewapp.data.local.datastore.SessionStore
 import com.example.aiinterviewapp.domain.model.Interview
 import com.example.aiinterviewapp.domain.repository.InterviewRepository
 import com.example.aiinterviewapp.domain.usecase.GetInterviewHistoryUseCase
@@ -18,7 +18,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val authPreferences: AuthPreferences,
+    private val sessionStore: SessionStore,
     private val getInterviewHistoryUseCase: GetInterviewHistoryUseCase,
     private val interviewRepository: InterviewRepository
 ) : ViewModel() {
@@ -42,8 +42,12 @@ class HomeViewModel @Inject constructor(
             _uiState.update { it.copy(isLoading = true, isError = false) }
             var hasLoaded = false
             try {
+                // History and the resumable interview are both already scoped
+                // to the session inside the repository, so the dashboard needs
+                // no knowledge of user ids. Combining the display name with
+                // them means signing out visibly empties the screen.
                 combine(
-                    authPreferences.userName,
+                    sessionStore.userName,
                     getInterviewHistoryUseCase(),
                     interviewRepository.getResumableInterviewFlow()
                 ) { name, history, resumable ->

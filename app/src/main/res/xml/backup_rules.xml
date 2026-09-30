@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Resume text and auth state are personal data; never back them up. -->
+    <!--
+      Interviews and resume text are personal data tied to one Google account.
+      They must not leave the device (RULE 11, RULE 17).
+
+      The Room database is the important exclusion here. Phase 2 already
+      excluded DataStore, so resume text and the session were covered, but the
+      database, which holds every interview, answer and score, was not.
+      Anyone restoring a backup onto another device would otherwise have
+      received a complete history belonging to a different person.
+    -->
     <exclude domain="file" path="datastore/" />
     <exclude domain="sharedpref" path="." />
+    <exclude domain="database" path="." />
 </full-backup-content>

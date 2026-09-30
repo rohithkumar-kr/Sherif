@@ -2,7 +2,7 @@ package com.example.aiinterviewapp.ui.screens.interview
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
+import com.example.aiinterviewapp.data.local.datastore.ScopedResumeText
 import com.example.aiinterviewapp.data.service.VoiceResult
 import com.example.aiinterviewapp.data.service.VoiceService
 import com.example.aiinterviewapp.domain.model.Interview
@@ -34,7 +34,7 @@ class InterviewViewModel @Inject constructor(
     private val evaluateAnswerUseCase: EvaluateAnswerUseCase,
     private val repository: InterviewRepository,
     private val voiceService: VoiceService,
-    private val authPreferences: AuthPreferences
+    private val scopedResumeText: ScopedResumeText
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<InterviewUiState>(InterviewUiState.Loading)
@@ -60,6 +60,10 @@ class InterviewViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        super.onCleared()
+        // The microphone must be released when the screen goes, not when the
+        // user presses stop. Leaving a recogniser running holds the audio input
+        // device and the indicator stays on with nothing collecting results.
         voiceService.stopTts()
         voiceService.stopListening()
     }
@@ -112,7 +116,7 @@ class InterviewViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = InterviewUiState.Loading
             try {
-                resumeContext = authPreferences.resumeText.first()
+                resumeContext = scopedResumeText.currentUserResumeText.first()
                 val resumable = repository.getResumableInterview()
                 if (resumable != null &&
                     resumable.role == role &&
@@ -138,7 +142,7 @@ class InterviewViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = InterviewUiState.Loading
             try {
-                resumeContext = authPreferences.resumeText.first()
+                resumeContext = scopedResumeText.currentUserResumeText.first()
                 val saved = repository.getInterviewById(id)
                 if (saved == null) {
                     _uiState.value = InterviewUiState.Error("This interview is no longer available.")
@@ -288,6 +292,21 @@ class InterviewViewModel @Inject constructor(
         val trimmed = answer.trim()
         if (trimmed.isEmpty() || isBusy) return
 
+        // A finished interview is read-only. Without this, a send that was
+        // already in flight when the last question completed would append a new
+        // answer to a COMPLETED interview, resurrecting it as resumable and
+        // re-charging an evaluation for a question the user never saw.
+        if (interview.status == InterviewStatus.COMPLETED) return
+
+        // The lock is taken here, synchronously, and not inside the coroutine
+        // below. It used to be taken by evaluateQuestion, which runs only after
+        // an awaited database write -- so for the duration of that write a second
+        // submit still passed the isBusy guard, overwrote the stored answer, and
+        // added a second copy of the message to the transcript. Voice input made
+        // this reachable: a recognition result landing while the user was also
+        // tapping send.
+        isBusy = true
+
         messages.add(ChatMessage(trimmed, isAi = false))
         _uiState.value = InterviewUiState.Success(messages.toList())
 
@@ -297,7 +316,7 @@ class InterviewViewModel @Inject constructor(
         )
         viewModelScope.launch {
             persistProgress()
-            evaluateQuestion(questionWithAnswer)
+            evaluateQuestion(questionWithAnswer, lockAlreadyHeld = true)
         }
     }
 
@@ -320,10 +339,20 @@ class InterviewViewModel @Inject constructor(
         }
     }
 
-    private fun evaluateQuestion(question: InterviewQuestion) {
+    /**
+     * Scores one answer and moves the interview on.
+     *
+     * [lockAlreadyHeld] exists because [submitAnswer] takes the lock itself,
+     * before its coroutine starts, to close the window in which a second submit
+     * could pass the guard. Every other caller goes through the guard here.
+     */
+    private fun evaluateQuestion(question: InterviewQuestion, lockAlreadyHeld: Boolean = false) {
         val answer = question.answer?.trim().orEmpty()
-        if (answer.isEmpty() || isBusy) return
-        isBusy = true
+        if (answer.isEmpty()) return
+        if (!lockAlreadyHeld) {
+            if (isBusy) return
+            isBusy = true
+        }
         viewModelScope.launch {
             _uiState.value = InterviewUiState.Evaluating
             evaluateAnswerUseCase(question.question, answer)
@@ -355,6 +384,8 @@ class InterviewViewModel @Inject constructor(
 
     private fun finishInterview() {
         val interview = currentInterview ?: return
+        if (isBusy) return
+        isBusy = true
         viewModelScope.launch {
             val finalInterview = interview.copy(
                 status = InterviewStatus.COMPLETED,
@@ -362,10 +393,19 @@ class InterviewViewModel @Inject constructor(
             )
             currentInterview = finalInterview
             voiceService.stopTts()
-            if (persistProgress()) {
+
+            val saved = persistProgress()
+
+            // Both branches release the lock and settle `pendingCompletion`
+            // before publishing any state, with no suspension in between. The
+            // interview is complete either way, so the only thing left is
+            // whether the write landed -- and Try Again retries exactly that.
+            isBusy = false
+            pendingCompletion = !saved
+
+            if (saved) {
                 _uiState.value = InterviewUiState.Completed(finalInterview.id)
             } else {
-                pendingCompletion = true
                 _uiState.value = InterviewUiState.Error("Couldn't save your completed interview. Tap Try Again to retry.")
             }
         }
@@ -423,7 +463,11 @@ class InterviewViewModel @Inject constructor(
         val suggestions = evaluation.suggestions.trim()
         val weaknesses = evaluation.weaknesses.trim()
         return buildString {
-            append("Here's my feedback on your answer.")
+            // The score the model actually returned, so the answer the user is
+            // looking at is the evaluation the backend produced rather than a
+            // summary of it. The full breakdown stays on the report.
+            append("Here's my feedback on your answer. ")
+            append("Score: ${evaluation.score}/10.")
             if (strengths.isNotEmpty()) {
                 append("\n\nStrengths: ").append(strengths)
             }

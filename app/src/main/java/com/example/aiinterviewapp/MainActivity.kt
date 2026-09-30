@@ -19,6 +19,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
+import com.example.aiinterviewapp.data.local.datastore.SessionStore
+import com.example.aiinterviewapp.data.remote.SessionExpiryNotifier
+import com.example.aiinterviewapp.domain.repository.AuthRepository
 import com.example.aiinterviewapp.ui.navigation.Screen
 import com.example.aiinterviewapp.ui.screens.create.CreateInterviewScreen
 import com.example.aiinterviewapp.ui.screens.history.HistoryScreen
@@ -38,6 +41,9 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var authPreferences: AuthPreferences
+    @Inject lateinit var sessionStore: SessionStore
+    @Inject lateinit var authRepository: AuthRepository
+    @Inject lateinit var sessionExpiryNotifier: SessionExpiryNotifier
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,15 +51,43 @@ class MainActivity : ComponentActivity() {
         setContent {
             val isDarkMode by authPreferences.isDarkMode.collectAsState(initial = false)
             AIInterviewAppTheme(darkTheme = isDarkMode) {
-                AppNavigation(authPreferences)
+                AppNavigation(authPreferences, sessionStore, authRepository, sessionExpiryNotifier)
             }
         }
     }
 }
 
 @Composable
-fun AppNavigation(authPreferences: AuthPreferences) {
+fun AppNavigation(
+    authPreferences: AuthPreferences,
+    sessionStore: SessionStore,
+    authRepository: AuthRepository,
+    sessionExpiryNotifier: SessionExpiryNotifier
+) {
     val navController = rememberNavController()
+    val scope = rememberCoroutineScope()
+
+    // The one place a dead session is turned into navigation.
+    //
+    // Collected here, at the navigation root, rather than in whichever screen
+    // happened to make the failing call. Three AI operations can each hit an
+    // expired session, and a per-screen handler is a dead-end waiting for the
+    // fourth one. It also has to sit above the NavHost so a `popUpTo(0)` from
+    // the response does not tear down the collector that is handling it.
+    //
+    // The notifier is latched, so the several requests that will all fail at
+    // once produce exactly one sign-out, and `reset` re-arms it after sign-in.
+    LaunchedEffect(Unit) {
+        sessionExpiryNotifier.expiries.collect {
+            scope.launch {
+                authRepository.signOut()
+            }
+            navController.navigate(Screen.Login.route) {
+                popUpTo(0) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -61,7 +95,12 @@ fun AppNavigation(authPreferences: AuthPreferences) {
         modifier = Modifier.fillMaxSize()
     ) {
         composable(Screen.Splash.route) {
-            val isLoggedIn by authPreferences.isLoggedIn.collectAsState(initial = null)
+            // Null while the stored session is still being read, so the splash
+            // screen waits rather than flashing the login screen. A session that
+            // has already expired reads as false and the user is asked to sign
+            // in again, which is the behaviour a boolean flag could not express
+            // (RULE 5).
+            val isLoggedIn by sessionStore.isSignedIn.collectAsState(initial = null)
             SplashScreen(
                 isLoggedIn = isLoggedIn,
                 onNavigateToAuth = {
@@ -79,6 +118,11 @@ fun AppNavigation(authPreferences: AuthPreferences) {
 
         composable(Screen.Login.route) {
             LoginScreen(onLoginSuccess = {
+                // A new session exists, so the expiry signal can be armed again.
+                // Without this the latch stays closed and the *next* expiry
+                // happens silently -- the exact dead-end this replaced, one
+                // sign-in later.
+                sessionExpiryNotifier.reset()
                 navController.navigate(Screen.Home.route) {
                     popUpTo(Screen.Login.route) { inclusive = true }
                 }
@@ -90,6 +134,7 @@ fun AppNavigation(authPreferences: AuthPreferences) {
                 onNavigateToCreate = { navController.navigate(Screen.CreateInterview.route) },
                 onNavigateToHistory = { navController.navigate(Screen.History.route) },
                 onNavigateToProfile = { navController.navigate(Screen.Profile.route) },
+                onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                 onNavigateToResume = { navController.navigate(Screen.Resume.route) },
                 onNavigateToReport = { id -> navController.navigate(Screen.Report.createRoute(id)) },
                 onResumeInterview = { interviewId ->
@@ -178,11 +223,15 @@ fun AppNavigation(authPreferences: AuthPreferences) {
         }
 
         composable(Screen.Profile.route) {
-            val scope = rememberCoroutineScope()
             ProfileScreen(
                 onBack = { navController.popBackStack() },
                 onLogout = {
-                    scope.launch { authPreferences.logout() }
+                    // Sign-out destroys the session and the cached Google
+                    // account choice, but leaves the user's own interviews and
+                    // resume on the device. They come back scoped to the same
+                    // user id if that person signs in again, and stay invisible
+                    // to anyone else (RULE 6, RULE 10).
+                    scope.launch { authRepository.signOut() }
                     navController.navigate(Screen.Login.route) {
                         popUpTo(0)
                     }

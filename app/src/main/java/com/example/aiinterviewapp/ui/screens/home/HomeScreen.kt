@@ -28,11 +28,11 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +66,7 @@ fun HomeScreen(
     onNavigateToCreate: () -> Unit,
     onNavigateToHistory: () -> Unit,
     onNavigateToProfile: () -> Unit,
+    onNavigateToSettings: () -> Unit,
     onNavigateToResume: () -> Unit,
     onNavigateToReport: (String) -> Unit,
     onResumeInterview: (String) -> Unit,
@@ -115,7 +116,7 @@ fun HomeScreen(
                     onPractice = onNavigateToCreate,
                     onHistory = onNavigateToHistory,
                     onResume = onNavigateToResume,
-                    onProfile = onNavigateToProfile
+                    onSettings = onNavigateToSettings
                 )
             }
 
@@ -387,7 +388,7 @@ private fun QuickActions(
     onPractice: () -> Unit,
     onHistory: () -> Unit,
     onResume: () -> Unit,
-    onProfile: () -> Unit
+    onSettings: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -415,10 +416,10 @@ private fun QuickActions(
                 modifier = Modifier.weight(1f)
             )
             QuickActionCard(
-                title = "Profile",
+                title = "Settings",
                 subtitle = "Account & settings",
-                icon = Icons.Default.AccountCircle,
-                onClick = onProfile,
+                icon = Icons.Default.Settings,
+                onClick = onSettings,
                 modifier = Modifier.weight(1f)
             )
         }

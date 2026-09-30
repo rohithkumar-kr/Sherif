@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AIInterviewApp"
 include(":app")
+include(":backend")

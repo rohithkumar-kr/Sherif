@@ -5,11 +5,13 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import com.example.aiinterviewapp.data.local.datastore.AuthPreferences
 import com.example.aiinterviewapp.data.local.datastore.DataStoreResumeProfileStore
+import com.example.aiinterviewapp.data.local.datastore.SessionStore
 import com.example.aiinterviewapp.data.local.datastore.dataStore
 import com.example.aiinterviewapp.data.service.PdfExportService
 import com.example.aiinterviewapp.data.service.ResumeService
 import com.example.aiinterviewapp.data.service.VoiceService
 import com.example.aiinterviewapp.domain.repository.ResumeProfileStore
+import com.example.aiinterviewapp.utils.DevAuthPolicy
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -48,13 +50,26 @@ object AppModule {
     @Provides
     @Singleton
     fun provideResumeProfileStore(
+        sessionStore: SessionStore,
         dataStore: DataStore<Preferences>,
         json: Json
-    ): ResumeProfileStore = DataStoreResumeProfileStore(dataStore, json)
+    ): ResumeProfileStore = DataStoreResumeProfileStore(sessionStore, dataStore, json)
 
     @Provides
     @Singleton
     fun providePdfExportService(@ApplicationContext context: Context): PdfExportService {
         return PdfExportService(context)
     }
+
+    /**
+     * Whether this build may offer development sign-in.
+     *
+     * Injected rather than read from `BuildConfig` at each use site so the value
+     * is decided once, and so the two consumers -- `AuthRepositoryImpl` and
+     * `LoginViewModel` -- cannot disagree about it. In a release build both
+     * constants are `false`, so R8 folds every check away.
+     */
+    @Provides
+    @Singleton
+    fun provideDevAuthPolicy(): DevAuthPolicy = DevAuthPolicy.fromBuildConfig()
 }
