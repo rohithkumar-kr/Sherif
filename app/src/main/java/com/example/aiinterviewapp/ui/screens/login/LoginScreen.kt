@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.PersonOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.aiinterviewapp.ui.common.SherifBrandMark
 import com.example.aiinterviewapp.ui.common.SherifButton
+import com.example.aiinterviewapp.ui.common.SherifOutlinedButton
 
 @Composable
 fun LoginScreen(
@@ -112,6 +114,14 @@ fun LoginScreen(
                     onClick = { activity?.let(viewModel::loginWithGoogle) },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     icon = Icons.Default.AccountCircle
+                )
+
+                SherifOutlinedButton(
+                    text = "Continue as Guest",
+                    onClick = viewModel::signInAsGuest,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    icon = Icons.Default.PersonOutline,
+                    enabled = !uiState.isLoading
                 )
 
                 // Development entry. A TextButton, not a SherifButton, so it is

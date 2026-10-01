@@ -20,6 +20,13 @@ interface AuthRepository {
     suspend fun signInWithGoogle(activity: Activity): AuthResult
 
     /**
+     * Signs in as a guest user.
+     *
+     * Allows users to explore the app, practice interviews, and manage resumes in Guest mode.
+     */
+    suspend fun signInAsGuest(): AuthResult
+
+    /**
      * Signs in as the single development identity, where a debug build is
      * talking to a backend started with `SHERIF_DEV_AUTH_ENABLED=true`.
      *

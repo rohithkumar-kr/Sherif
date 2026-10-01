@@ -206,10 +206,26 @@ class DevSignInRepositoryTest {
         // out of a real user's scope.
         verify(sessionStore).saveSession(
             accessToken = any(),
-            userId = DevAuthPolicy.DEV_USER_ID,
+            userId = org.mockito.kotlin.eq(DevAuthPolicy.DEV_USER_ID),
             expiresAt = any(),
             email = anyOrNull(),
             name = anyOrNull()
+        )
+    }
+
+    @Test
+    fun `guest sign-in stores guest session`() = runTest {
+        val policy = DevAuthPolicy(buildEnabled = true, apiConfigured = true)
+
+        val result = repository(policy).signInAsGuest()
+
+        assertTrue(result is AuthResult.Success)
+        verify(sessionStore).saveSession(
+            accessToken = any(),
+            userId = any(),
+            expiresAt = any(),
+            email = org.mockito.kotlin.eq("guest@example.com"),
+            name = org.mockito.kotlin.eq("Guest User")
         )
     }
 

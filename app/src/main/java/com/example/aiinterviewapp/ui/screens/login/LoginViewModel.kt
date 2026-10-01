@@ -77,6 +77,29 @@ class LoginViewModel @Inject constructor(
     }
 
     /**
+     * Signs in as a guest user.
+     */
+    fun signInAsGuest() {
+        if (_uiState.value.isLoading) return
+
+        _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+        viewModelScope.launch {
+            when (val result = authRepository.signInAsGuest()) {
+                is AuthResult.Success -> {
+                    _uiState.value = LoginUiState()
+                    _loginEvent.emit(Unit)
+                }
+                is AuthResult.Failure -> {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        errorMessage = result.message
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * Signs in with Google, then exchanges the ID token for a SHERIF session.
      *
      * Failure is a first-class outcome. Showing an error and staying on the

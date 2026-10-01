@@ -53,6 +53,33 @@ class AuthRepositoryImpl @Inject constructor(
             AuthResult.Failure(exception.message ?: "Sign-in failed")
         }
 
+    override suspend fun signInAsGuest(): AuthResult {
+        return try {
+            val session = backendApi.createDevelopmentSession()
+            sessionStore.saveSession(
+                accessToken = session.accessToken,
+                userId = session.userId,
+                expiresAt = session.expiresAt,
+                email = "guest@example.com",
+                name = "Guest User"
+            )
+            AuthResult.Success(session.userId)
+        } catch (e: Exception) {
+            val guestUserId = "guest_user"
+            val guestAccessToken = "guest_local_token"
+            val thirtyDaysInMillis = 30L * 24 * 60 * 60 * 1000L
+            val expiresAt = System.currentTimeMillis() + thirtyDaysInMillis
+            sessionStore.saveSession(
+                accessToken = guestAccessToken,
+                userId = guestUserId,
+                expiresAt = expiresAt,
+                email = "guest@example.com",
+                name = "Guest User"
+            )
+            AuthResult.Success(guestUserId)
+        }
+    }
+
     /**
      * Asks a development backend for a development session.
      *
