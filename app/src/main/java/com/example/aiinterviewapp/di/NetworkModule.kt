@@ -65,7 +65,7 @@ object NetworkModule {
             // would report an expiry for a 401 that the retry loop was about to
             // deal with, and sign a user out over a recoverable request.
             .addInterceptor(sessionExpiryInterceptor)
-            .connectTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             // The read timeout is 60s and the retry budget adds at most two
